@@ -1,0 +1,11 @@
+services:
+  proxypools:
+    build: .
+    ports:
+      - "8080:8080"
+      - "7777:7777"
+      - "7780:7780"
+    volumes:
+      - ./data:/app/data
+    env_file:
+      - .env.example

@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>代理池管理后台</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="hero">
+        <div>
+          <p class="hero__eyebrow">ProxyPools</p>
+          <h1 class="hero__title">代理池管理后台</h1>
+          <p class="hero__subtitle">集中查看运行状态、切换策略、节点健康、订阅更新与事件日志。</p>
+        </div>
+        <div id="port-selector"></div>
+      </header>
+
+      <section id="dashboard"></section>
+      <section id="dispatcher-status"></section>
+
+      <div class="layout-grid">
+        <div class="layout-main">
+          <section id="runtime-settings"></section>
+          <section id="lane-management"></section>
+          <section id="node-management"></section>
+        </div>
+        <aside class="layout-side">
+          <section id="subscription"></section>
+          <section id="events"></section>
+        </aside>
+      </div>
+    </main>
+    <script src="/static/app.js"></script>
+  </body>
+</html>
