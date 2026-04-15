@@ -174,7 +174,10 @@ function createInfoRow(label, value, fallback = '-') {
   row.className = 'info-row';
   const strong = document.createElement('strong');
   strong.textContent = `${label}：`;
-  row.append(strong, ` ${textValue(value, fallback)}`);
+  const content = document.createElement('span');
+  content.className = 'info-row__value';
+  content.textContent = textValue(value, fallback);
+  row.append(strong, content);
   return row;
 }
 

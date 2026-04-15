@@ -41,6 +41,25 @@ func TestParseShareLinks(t *testing.T) {
 	}
 }
 
+func TestParseSubscriptionSkipsUnsupportedShareLinks(t *testing.T) {
+	input := []byte("tuic://secret@example.com:443#unsupported\nss://YWVzLTI1Ni1nY206cGFzc0BleGFtcGxlLmNvbTo4Mzg4#jp-1\n")
+	nodes, err := parser.ParseSubscription(input)
+	if err != nil {
+		t.Fatalf("expected unsupported share link to be skipped, got %v", err)
+	}
+	if len(nodes) != 1 || nodes[0].ProtocolType != "shadowsocks" {
+		t.Fatalf("expected supported node to remain, got %#v", nodes)
+	}
+}
+
+func TestParseSupportedMalformedLinkStillFails(t *testing.T) {
+	input := []byte("trojan://password@example.com?sni=example.com#bad")
+	_, err := parser.ParseSubscription(input)
+	if err == nil {
+		t.Fatal("expected malformed supported trojan link to fail")
+	}
+}
+
 func TestParseBase64EncodedSubscription(t *testing.T) {
 	input := []byte("c3M6Ly9ZV1Z6TFRJMU5pMW5ZMjA2Y0dGemMwQmxlR0Z0Y0d4bExtTnZiVG80TXpnNCMqc3MtMQ==")
 	nodes, err := parser.ParseSubscription(input)

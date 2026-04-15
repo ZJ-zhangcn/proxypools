@@ -3,6 +3,7 @@ package parser
 import (
 	"encoding/base64"
 	"fmt"
+	"log"
 	"net"
 	"net/url"
 	"strconv"
@@ -14,6 +15,7 @@ import (
 func parseShareLinks(input []byte) ([]model.Node, error) {
 	lines := strings.Split(strings.TrimSpace(string(input)), "\n")
 	result := make([]model.Node, 0, len(lines))
+	firstUnsupported := ""
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -51,8 +53,14 @@ func parseShareLinks(input []byte) ([]model.Node, error) {
 			}
 			result = append(result, node)
 		default:
-			return nil, fmt.Errorf("unsupported share link: %s", line)
+			if firstUnsupported == "" {
+				firstUnsupported = line
+			}
+			log.Printf("unsupported share link skipped: %s", line)
 		}
+	}
+	if len(result) == 0 && firstUnsupported != "" {
+		return nil, fmt.Errorf("unsupported share link: %s", firstUnsupported)
 	}
 	return result, nil
 }
