@@ -45,7 +45,7 @@ func (c *ClashAPI) SwitchSelector(group, name string) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= http.StatusMultipleChoices {
-		msg, _ := io.ReadAll(resp.Body)
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		if len(msg) == 0 {
 			return fmt.Errorf("clash api switch selector failed: status %d", resp.StatusCode)
 		}

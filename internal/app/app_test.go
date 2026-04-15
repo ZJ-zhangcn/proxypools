@@ -1443,6 +1443,7 @@ func TestDispatcherFallbackRetriesNextPort(t *testing.T) {
 	if err := repo.UpdatePortRuntimeState(context.Background(), *canaryState); err != nil {
 		t.Fatalf("update standby runtime state failed: %v", err)
 	}
+	_ = a.dispatcher.rebuildSnapshot(context.Background())
 
 	failureBackend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad gateway", http.StatusBadGateway)
@@ -1497,19 +1498,45 @@ func TestDispatcherFallbackRetriesNextPort(t *testing.T) {
 	if fallbackState.LastErrorAt == "" {
 		t.Fatal("expected default lane last_error_at to be updated after fallback")
 	}
+
+	secondResp, err := http.Get("http://127.0.0.1:28085")
+	if err != nil {
+		t.Fatalf("second dispatcher fallback request failed: %v", err)
+	}
+	defer secondResp.Body.Close()
+	if secondResp.StatusCode != http.StatusNoContent {
+		t.Fatalf("expected second fallback request 204, got %d", secondResp.StatusCode)
+	}
+	if got := secondResp.Header.Get("X-ProxyPools-Dispatcher-Port"); got != "standby" {
+		t.Fatalf("expected second request to stay on standby, got %s", got)
+	}
+
 	events, err := a.ListEventLogs(context.Background(), 10)
 	if err != nil {
 		t.Fatalf("list events failed: %v", err)
 	}
-	found := false
+	fallbackCount := 0
 	for _, event := range events {
 		if event["event_type"] == "dispatcher_fallback" || (event["message"] != nil && strings.Contains(event["message"].(string), "dispatcher fallback")) {
-			found = true
-			break
+			fallbackCount++
 		}
 	}
-	if !found {
+	if fallbackCount == 0 {
 		t.Fatal("expected dispatcher_fallback event to be recorded")
+	}
+
+	secondEvents, err := a.ListEventLogs(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("list events after second request failed: %v", err)
+	}
+	secondFallbackCount := 0
+	for _, event := range secondEvents {
+		if event["event_type"] == "dispatcher_fallback" || (event["message"] != nil && strings.Contains(event["message"].(string), "dispatcher fallback")) {
+			secondFallbackCount++
+		}
+	}
+	if secondFallbackCount != fallbackCount {
+		t.Fatalf("expected second request to avoid new fallback events, got %d then %d", fallbackCount, secondFallbackCount)
 	}
 }
 func TestDispatcherSOCKSRelay(t *testing.T) {

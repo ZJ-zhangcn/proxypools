@@ -437,6 +437,9 @@ func (a *App) RefreshSubscription(ctx context.Context) (map[string]any, error) {
 	}
 
 	a.SubscriptionConfigured = true
+	if a.dispatcher != nil {
+		_ = a.dispatcher.rebuildSnapshot(ctx)
+	}
 	_ = a.repo.CreateEventLog(ctx, model.EventLog{EventType: "subscription_refresh", Level: "info", Message: "subscription refreshed", MetadataJSON: fmt.Sprintf(`{"added":%d,"removed":%d}`, added, removed)})
 	if err := a.repo.UpdateSubscriptionFetchResult(ctx, sub.ID, fetchedAt, "success", "", added, removed); err != nil {
 		return nil, err
@@ -542,6 +545,9 @@ func (a *App) runHealthCheck(ctx context.Context) {
 		}
 		scored := pool.Score(updated)
 		statuses[i] = scored.NodeRuntimeStatus
+		if statusesEqual(status, scored.NodeRuntimeStatus) {
+			continue
+		}
 		_ = a.repo.UpsertNodeRuntimeStatus(ctx, scored.NodeRuntimeStatus)
 	}
 	for _, port := range a.Config.ResolvedPorts() {
@@ -558,6 +564,9 @@ func (a *App) runHealthCheck(ctx context.Context) {
 		}
 	}
 	_ = a.reconcileLaneStates(ctx, time.Now().UTC().Format(time.RFC3339))
+	if a.dispatcher != nil {
+		_ = a.dispatcher.rebuildSnapshot(ctx)
+	}
 }
 
 func (a *App) reconcilePortRuntime(ctx context.Context, port config.PortConfig, state *model.PortRuntimeState, statuses []model.NodeRuntimeStatus) error {
@@ -738,6 +747,21 @@ func (a *App) reconcileLaneStates(ctx context.Context, now string) error {
 	return nil
 }
 
+func statusesEqual(a, b model.NodeRuntimeStatus) bool {
+	return a.NodeID == b.NodeID &&
+		a.State == b.State &&
+		a.Tier == b.Tier &&
+		a.Score == b.Score &&
+		a.LatencyMS == b.LatencyMS &&
+		a.RecentSuccessRate == b.RecentSuccessRate &&
+		a.ConsecutiveFailures == b.ConsecutiveFailures &&
+		a.LastCheckAt == b.LastCheckAt &&
+		a.LastSuccessAt == b.LastSuccessAt &&
+		a.LastFailureAt == b.LastFailureAt &&
+		a.CooldownUntil == b.CooldownUntil &&
+		a.ManualDisabled == b.ManualDisabled
+}
+
 type laneAssignment struct {
 	SourceKey        string
 	Protocol         string
@@ -778,6 +802,9 @@ func (a *App) SetNodeManualDisabledByPort(ctx context.Context, portKey string, n
 		}
 		return err
 	}
+	if a.dispatcher != nil {
+		_ = a.dispatcher.rebuildSnapshot(ctx)
+	}
 	action := "node_enabled"
 	message := "node enabled"
 	if disabled {
@@ -814,6 +841,9 @@ func (a *App) UpdateRuntimeSettingsByPort(ctx context.Context, portKey string, r
 	if err := a.repo.UpdatePortRuntimeState(ctx, *state); err != nil {
 		return err
 	}
+	if a.dispatcher != nil {
+		_ = a.dispatcher.rebuildSnapshot(ctx)
+	}
 	updateConfigPortSettings(&a.Config, portKey, runtimeMode, poolAlgorithm)
 	message := fmt.Sprintf("runtime mode=%s, pool algorithm=%s", runtimeMode, poolAlgorithm)
 	if portKey != config.DefaultPortKey {
@@ -844,6 +874,9 @@ func (a *App) UnlockSelectionByPort(ctx context.Context, portKey string) error {
 	state.LastSwitchAt = time.Now().UTC().Format(time.RFC3339)
 	if err := a.repo.UpdatePortRuntimeState(ctx, *state); err != nil {
 		return err
+	}
+	if a.dispatcher != nil {
+		_ = a.dispatcher.rebuildSnapshot(ctx)
 	}
 	message := "selection unlocked"
 	if portKey != config.DefaultPortKey {
@@ -926,6 +959,9 @@ func (a *App) SwitchNodeByPort(ctx context.Context, portKey string, nodeID int64
 	state.LastSwitchAt = time.Now().UTC().Format(time.RFC3339)
 	if err := a.repo.UpdatePortRuntimeState(ctx, *state); err != nil {
 		return err
+	}
+	if a.dispatcher != nil {
+		_ = a.dispatcher.rebuildSnapshot(ctx)
 	}
 	message := "node switched manually"
 	if portKey != config.DefaultPortKey {
@@ -1138,6 +1174,38 @@ type dispatcherRelay struct {
 	httpSrv    *http.Server
 	httpClient *http.Client
 	closeOnce  sync.Once
+	snapshotMu sync.RWMutex
+	snapshot   dispatcherSnapshot
+}
+
+type dispatcherSnapshot struct {
+	candidates []pool.DispatcherCandidate
+	indexByKey map[string]int
+}
+
+func (d *dispatcherRelay) updateSnapshotCandidate(candidate pool.DispatcherCandidate, healthy bool, score float64, lastFailureAt string) {
+	key := dispatcherCandidateKey(candidate)
+	d.snapshotMu.Lock()
+	defer d.snapshotMu.Unlock()
+	idx, ok := d.snapshot.indexByKey[key]
+	if !ok || idx < 0 || idx >= len(d.snapshot.candidates) {
+		return
+	}
+	updated := d.snapshot.candidates[idx]
+	updated.Weight = candidate.Weight
+	updated.Protocol = candidate.Protocol
+	if healthy {
+		updated.HealthyNodeCount = 1
+		updated.CurrentActiveSet = true
+		updated.CurrentActiveScore = score
+		updated.LastFailureAt = lastFailureAt
+	} else {
+		updated.HealthyNodeCount = 0
+		updated.CurrentActiveSet = false
+		updated.CurrentActiveScore = 0
+		updated.LastFailureAt = lastFailureAt
+	}
+	d.snapshot.candidates[idx] = updated
 }
 
 type laneTarget struct {
@@ -1166,6 +1234,11 @@ func newDispatcherRelay(cfg config.Config, repo *sqliteRepo.Repository) (*dispat
 		socksLn:    socksLn,
 		httpClient: &http.Client{Timeout: 30 * time.Second},
 	}
+	if err := d.rebuildSnapshot(context.Background()); err != nil {
+		_ = httpLn.Close()
+		_ = socksLn.Close()
+		return nil, err
+	}
 	d.httpSrv = &http.Server{Handler: http.HandlerFunc(d.serveHTTP)}
 	go func() {
 		_ = d.httpSrv.Serve(httpLn)
@@ -1184,6 +1257,7 @@ func newDispatcherRelay(cfg config.Config, repo *sqliteRepo.Repository) (*dispat
 
 func (d *dispatcherRelay) SetRepo(repo *sqliteRepo.Repository) {
 	d.repo = repo
+	_ = d.rebuildSnapshot(context.Background())
 }
 
 func (d *dispatcherRelay) Close() error {
@@ -1260,12 +1334,14 @@ func (d *dispatcherRelay) serveHTTP(w http.ResponseWriter, r *http.Request) {
 			now := time.Now().UTC().Format(time.RFC3339)
 			_ = d.recordFallbackEvent(r.Context(), candidate.PortKey, err)
 			_ = d.repo.UpdateRequestLaneError(r.Context(), candidate.PortKey, candidate.LaneKey, now, "error")
+			d.updateSnapshotCandidate(candidate, false, 0, now)
 			lastErr = err
 			currentLaneKey = dispatcherCandidateKey(candidate)
 			continue
 		}
 		now := time.Now().UTC().Format(time.RFC3339)
 		_ = d.repo.UpdateRequestLaneUsage(r.Context(), candidate.PortKey, candidate.LaneKey, now, "ready")
+		d.updateSnapshotCandidate(candidate, true, candidate.CurrentActiveScore, candidate.LastFailureAt)
 		defer resp.Body.Close()
 		copyHeaders(w.Header(), resp.Header)
 		w.Header().Set("X-ProxyPools-Dispatcher-Port", candidate.PortKey)
@@ -1349,12 +1425,14 @@ func (d *dispatcherRelay) serveSOCKS(conn net.Conn) {
 			now := time.Now().UTC().Format(time.RFC3339)
 			_ = d.recordFallbackEvent(context.Background(), candidate.PortKey, err)
 			_ = d.repo.UpdateRequestLaneError(context.Background(), candidate.PortKey, candidate.LaneKey, now, "error")
+			d.updateSnapshotCandidate(candidate, false, 0, now)
 			lastErr = err
 			currentLaneKey = dispatcherCandidateKey(candidate)
 			continue
 		}
 		now := time.Now().UTC().Format(time.RFC3339)
 		_ = d.repo.UpdateRequestLaneUsage(context.Background(), candidate.PortKey, candidate.LaneKey, now, "ready")
+		d.updateSnapshotCandidate(candidate, true, candidate.CurrentActiveScore, candidate.LastFailureAt)
 		defer targetConn.Close()
 		if _, err := targetConn.Write([]byte{0x05, 0x01, 0x00}); err != nil {
 			return
@@ -1449,27 +1527,19 @@ func (d *dispatcherRelay) recordFallbackEvent(ctx context.Context, portKey strin
 	})
 }
 
-func (d *dispatcherRelay) selectPortKey(ctx context.Context, currentPortKey string) (string, error) {
-	candidate, err := d.selectCandidate(ctx, currentPortKey)
-	if err != nil {
-		return "", err
-	}
-	return candidate.PortKey, nil
-}
-
-func (d *dispatcherRelay) selectCandidate(ctx context.Context, currentLaneKey string) (pool.DispatcherCandidate, error) {
+func (d *dispatcherRelay) rebuildSnapshot(ctx context.Context) error {
 	if d.repo == nil {
-		return pool.DispatcherCandidate{}, fmt.Errorf("dispatcher repository unavailable")
+		return fmt.Errorf("dispatcher repository unavailable")
 	}
 	states, err := d.repo.ListPortRuntimeStates(ctx)
 	if err != nil {
-		return pool.DispatcherCandidate{}, err
+		return err
 	}
 	candidates := make([]pool.DispatcherCandidate, 0, len(states))
 	for _, state := range states {
 		statuses, err := d.repo.ListNodeRuntimeStatusesByPort(ctx, state.PortKey)
 		if err != nil {
-			return pool.DispatcherCandidate{}, err
+			return err
 		}
 		scoreByNodeID := make(map[int64]model.NodeRuntimeStatus, len(statuses))
 		for _, status := range statuses {
@@ -1477,7 +1547,7 @@ func (d *dispatcherRelay) selectCandidate(ctx context.Context, currentLaneKey st
 		}
 		lanes, err := d.repo.ListRequestLaneStatesByPort(ctx, state.PortKey)
 		if err != nil {
-			return pool.DispatcherCandidate{}, err
+			return err
 		}
 		for _, lane := range lanes {
 			candidate := pool.DispatcherCandidate{PortKey: state.PortKey, LaneKey: lane.LaneKey, Protocol: lane.Protocol, Weight: lane.Weight}
@@ -1491,6 +1561,32 @@ func (d *dispatcherRelay) selectCandidate(ctx context.Context, currentLaneKey st
 			candidates = append(candidates, candidate)
 		}
 	}
+	indexByKey := make(map[string]int, len(candidates))
+	for i, candidate := range candidates {
+		indexByKey[dispatcherCandidateKey(candidate)] = i
+	}
+	d.snapshotMu.Lock()
+	d.snapshot = dispatcherSnapshot{candidates: candidates, indexByKey: indexByKey}
+	d.snapshotMu.Unlock()
+	return nil
+}
+
+func (d *dispatcherRelay) snapshotCandidates() []pool.DispatcherCandidate {
+	d.snapshotMu.RLock()
+	defer d.snapshotMu.RUnlock()
+	return append([]pool.DispatcherCandidate(nil), d.snapshot.candidates...)
+}
+
+func (d *dispatcherRelay) selectPortKey(ctx context.Context, currentPortKey string) (string, error) {
+	candidate, err := d.selectCandidate(ctx, currentPortKey)
+	if err != nil {
+		return "", err
+	}
+	return candidate.PortKey, nil
+}
+
+func (d *dispatcherRelay) selectCandidate(ctx context.Context, currentLaneKey string) (pool.DispatcherCandidate, error) {
+	candidates := d.snapshotCandidates()
 	if stickyKey := stickyKeyFromContext(ctx); stickyKey != "" {
 		if selected, ok := pool.SelectStickyDispatcherLane(stickyKey, candidates); ok {
 			return selected, nil
@@ -1596,24 +1692,17 @@ func (d *dispatcherRelay) status(ctx context.Context) (map[string]any, error) {
 }
 
 func (d *dispatcherRelay) targetHTTPLane(candidate pool.DispatcherCandidate) (*laneTarget, error) {
-	if d.repo == nil {
-		return nil, fmt.Errorf("dispatcher repository unavailable")
-	}
-	laneState, err := d.repo.GetRequestLaneState(context.Background(), candidate.PortKey, candidate.LaneKey)
-	if err != nil {
-		return nil, err
-	}
 	for _, port := range d.ports {
 		if port.Key != normalizedPortKey(candidate.PortKey) {
 			continue
 		}
-		lanePort, err := laneListenPort(port, laneState.Protocol, laneState.LaneKey)
+		lanePort, err := laneListenPort(port, candidate.Protocol, candidate.LaneKey)
 		if err != nil {
 			return nil, err
 		}
 		return &laneTarget{
 			Candidate: candidate,
-			URL:       &url.URL{Scheme: "http", Host: fmt.Sprintf("%s:%d", laneListenAddr(port, laneState.Protocol, laneState.LaneKey), lanePort)},
+			URL:       &url.URL{Scheme: "http", Host: fmt.Sprintf("%s:%d", laneListenAddr(port, candidate.Protocol, candidate.LaneKey), lanePort)},
 		}, nil
 	}
 	return nil, fmt.Errorf("dispatcher target lane not found")
