@@ -1,5 +1,9 @@
 # proxypools
 
+[![Docker Publish](https://github.com/ZJ-zhangcn/proxypools/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/ZJ-zhangcn/proxypools/actions/workflows/docker-publish.yml)
+[![License](https://img.shields.io/github/license/ZJ-zhangcn/proxypools)](LICENSE)
+[![GHCR](https://img.shields.io/badge/GHCR-ghcr.io%2Fzj--zhangcn%2Fproxypools-blue)](https://github.com/ZJ-zhangcn/proxypools/pkgs/container/proxypools)
+
 `proxypools` 是一个基于 Go 的自托管代理池控制面，负责订阅拉取、节点解析、健康检查、自动切换、统一入口调度和 Web 管理；实际的代理数据面由 `sing-box` 承载。
 
 它的目标不是实现一套新的代理协议，而是把“节点池管理”和“稳定对外代理入口”工程化：
@@ -85,33 +89,46 @@
 
 ## 快速开始
 
-## 方式一：Docker Compose（推荐）
+### 方式一：Docker Compose（推荐）
 
-项目自带 `Dockerfile` 和 `docker-compose.yml`。
+仓库提供了可直接部署的容器镜像与 `docker-compose.yml`，默认从 GHCR 拉取：
+
+```text
+ghcr.io/zj-zhangcn/proxypools:main
+```
 
 ### 1）准备配置
 
-仓库内提供了 `.env.example`，默认 `docker-compose.yml` 会直接加载它：
+先复制示例环境文件：
 
-```yaml
-env_file:
-  - .env.example
+```bash
+cp .env.example .env
 ```
 
-你至少需要检查并修改这些值：
+`docker-compose.yml` 默认读取 `.env`，不会直接加载 `.env.example`。
 
+至少需要检查并修改这些值：
+
+- `IMAGE_TAG`（默认 `main`；如果 Git 发布标签是 `v1.2.3`，镜像标签应使用 `1.2.3`）
 - `ADMIN_USERNAME`
 - `ADMIN_PASSWORD_HASH`
 - `SUBSCRIPTION_URL`
-- `SINGBOX_BINARY`（Docker 镜像内默认已提供）
+
+按需调整：
+
+- `ADMIN_LISTEN_PORT`
+- `HTTP_LISTEN_PORT`
+- `SOCKS_LISTEN_PORT`
+- `DISPATCHER_*`
 - `DB_PATH`
 
-建议不要直接把生产配置长期保存在 `.env.example`；更稳妥的做法是复制出你自己的 env 文件，并把 `docker-compose.yml` 里的 `env_file` 改成私有文件名。
+> `sing-box` 已内置在镜像中，容器部署通常不需要修改 `SINGBOX_BINARY`。
 
 ### 2）启动
 
 ```bash
-docker compose up --build
+docker compose pull
+docker compose up -d
 ```
 
 ### 3）访问
@@ -134,9 +151,19 @@ curl http://127.0.0.1:8080/healthz
 ok
 ```
 
+### 4）升级
+
+```bash
+# 先修改 .env 中的 IMAGE_TAG，例如 main -> 1.2.3
+docker compose pull
+docker compose up -d
+```
+
+> 约定上 Git 仓库的发布标签可能是 `v1.2.3`，但 GHCR 镜像标签使用不带 `v` 的 `1.2.3`。
+
 ---
 
-## 方式二：本地开发运行
+### 方式二：本地开发运行
 
 ### 前置条件
 
@@ -360,6 +387,10 @@ X-ProxyPools-Sticky-Key
 - dispatcher 状态查看
 - lane 状态查看
 
+管理页截图：
+
+![proxypools 管理页截图](docs/assets/dashboard.png)
+
 页面文案以简体中文为主。
 
 ---
@@ -470,9 +501,7 @@ docs/                        设计与实施文档
 ## 当前已知限制
 
 - 请求级分流规则尚未暴露成 env / Web 可配置项
-- 项目目前没有单独附带 `LICENSE`
 - 当前更偏单机自托管架构，不是多实例集群方案
-- Docker Compose 示例仍以仓库内示例 env 文件为入口，生产使用建议自行拆分私有环境文件
 
 ---
 
@@ -486,9 +515,15 @@ docs/                        设计与实施文档
 
 ---
 
+## 许可证
+
+本项目使用 [MIT License](LICENSE)。
+
+---
+
 ## 相关文档
 
 - 设计文档：`docs/superpowers/specs/2026-04-11-subscription-proxy-pool-design.md`
 - 实施计划：`docs/superpowers/plans/2026-04-11-subscription-proxy-pool-implementation.md`
 
-如果你准备继续把它做成更完整的公开项目，建议下一步先补：`LICENSE`、发布说明、示例配置和部署文档。
+如果你准备继续把它做成更完整的公开项目，建议下一步优先补：发布版本说明、监控/日志文档，以及 dispatcher rules 的外部可配置化。

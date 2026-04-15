@@ -1,0 +1,15 @@
+.git
+.github
+.ace-tool
+.claude
+.omc
+.tmpcheck
+.DS_Store
+.env
+data
+internal/app/data
+*.db
+*.sqlite
+*.sqlite3
+docs/assets
+README.md

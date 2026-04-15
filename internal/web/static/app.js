@@ -312,6 +312,15 @@ async function fetchDispatcherStatus() {
   return response.json();
 }
 
+async function fetchEvents() {
+  const response = await fetch(`${apiBase}/api/events`, { headers: { Accept: 'application/json' } });
+  if (!response.ok) {
+    const message = await response.text();
+    throw new Error(message || '加载事件日志失败');
+  }
+  return response.json();
+}
+
 function renderPortSelector(items, selectedPortKey) {
   const container = document.getElementById('port-selector');
   if (!container) {
