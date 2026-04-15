@@ -44,6 +44,12 @@ func parseShareLinks(input []byte) ([]model.Node, error) {
 				return nil, err
 			}
 			result = append(result, node)
+		case strings.HasPrefix(line, "anytls://"):
+			node, err := parseAnyTLS(line)
+			if err != nil {
+				return nil, err
+			}
+			result = append(result, node)
 		default:
 			return nil, fmt.Errorf("unsupported share link: %s", line)
 		}
@@ -263,6 +269,62 @@ func parseHysteria2(line string) (model.Node, error) {
 	}, nil
 }
 
+func parseAnyTLS(line string) (model.Node, error) {
+	u, err := url.Parse(strings.TrimSpace(line))
+	if err != nil {
+		return model.Node{}, err
+	}
+	host, portString, err := net.SplitHostPort(u.Host)
+	if err != nil {
+		return model.Node{}, err
+	}
+	port, err := strconv.Atoi(portString)
+	if err != nil {
+		return model.Node{}, err
+	}
+	name := decodedFragment(u)
+	if name == "" {
+		name = host
+	}
+	query := u.Query()
+	if security := strings.TrimSpace(query.Get("security")); security != "" && security != "tls" {
+		return model.Node{}, fmt.Errorf("unsupported anytls security: %s", security)
+	}
+	if network := strings.TrimSpace(query.Get("type")); network != "" && network != "tcp" {
+		return model.Node{}, fmt.Errorf("unsupported anytls transport: %s", network)
+	}
+	if packetEncoding := strings.TrimSpace(query.Get("packetEncoding")); packetEncoding != "" && packetEncoding != "none" {
+		return model.Node{}, fmt.Errorf("unsupported anytls packetEncoding: %s", packetEncoding)
+	}
+	password := passwordFromURL(u)
+	if strings.TrimSpace(password) == "" {
+		return model.Node{}, fmt.Errorf("invalid anytls password")
+	}
+	payload := map[string]any{
+		"type":        "anytls",
+		"server":      host,
+		"server_port": port,
+		"password":    password,
+		"tls": map[string]any{
+			"enabled": true,
+		},
+	}
+	applyAnyTLSTLS(payload, query)
+	payloadJSON, err := marshalPayload(payload)
+	if err != nil {
+		return model.Node{}, err
+	}
+	return model.Node{
+		SourceKey:    stableSourceKey("anytls", host, portString, name),
+		Name:         name,
+		ProtocolType: "anytls",
+		Server:       host,
+		Port:         port,
+		PayloadJSON:  payloadJSON,
+		Enabled:      true,
+	}, nil
+}
+
 func applyTLSAndTransport(payload map[string]any, query url.Values) {
 	if security := strings.TrimSpace(query.Get("security")); security == "reality" {
 		tlsConfig := ensureTLS(payload)
@@ -315,6 +377,44 @@ func applyTLSAndTransport(payload map[string]any, query url.Values) {
 		}
 		payload["transport"] = transport
 	}
+}
+
+func applyAnyTLSTLS(payload map[string]any, query url.Values) {
+	tlsConfig := ensureTLS(payload)
+	if sni := strings.TrimSpace(query.Get("sni")); sni != "" {
+		tlsConfig["server_name"] = sni
+	}
+	if insecure := query.Get("allowInsecure"); insecure == "1" || strings.EqualFold(insecure, "true") {
+		tlsConfig["insecure"] = true
+	}
+	if insecure := query.Get("insecure"); insecure == "1" || strings.EqualFold(insecure, "true") {
+		tlsConfig["insecure"] = true
+	}
+	if fp := strings.TrimSpace(query.Get("fp")); fp != "" {
+		tlsConfig["utls"] = map[string]any{"enabled": true, "fingerprint": fp}
+	}
+	if alpn := parseALPN(query["alpn"]); len(alpn) > 0 {
+		tlsConfig["alpn"] = alpn
+	}
+}
+
+func parseALPN(values []string) []string {
+	result := make([]string, 0, len(values))
+	seen := map[string]struct{}{}
+	for _, raw := range values {
+		for _, part := range strings.Split(raw, ",") {
+			part = strings.TrimSpace(part)
+			if part == "" {
+				continue
+			}
+			if _, ok := seen[part]; ok {
+				continue
+			}
+			seen[part] = struct{}{}
+			result = append(result, part)
+		}
+	}
+	return result
 }
 
 func ensureTLS(payload map[string]any) map[string]any {

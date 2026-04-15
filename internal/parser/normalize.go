@@ -14,7 +14,7 @@ func normalizeProtocol(protocol string) string {
 		return "shadowsocks"
 	case "socks", "socks5":
 		return "socks"
-	case "vmess", "vless", "trojan", "http":
+	case "vmess", "vless", "trojan", "http", "anytls":
 		return strings.ToLower(strings.TrimSpace(protocol))
 	default:
 		return strings.ToLower(strings.TrimSpace(protocol))
@@ -68,11 +68,43 @@ func intFromAny(value any) (int, error) {
 
 func stringFromAny(value any) string {
 	switch v := value.(type) {
+	case nil:
+		return ""
 	case string:
 		return v
 	case fmt.Stringer:
 		return v.String()
 	default:
 		return fmt.Sprint(v)
+	}
+}
+
+func anySliceToStrings(value any) []string {
+	switch v := value.(type) {
+	case nil:
+		return nil
+	case []string:
+		return v
+	case []any:
+		result := make([]string, 0, len(v))
+		for _, item := range v {
+			text := strings.TrimSpace(stringFromAny(item))
+			if text == "" {
+				continue
+			}
+			result = append(result, text)
+		}
+		return result
+	case string:
+		if strings.TrimSpace(v) == "" {
+			return nil
+		}
+		return []string{v}
+	default:
+		text := strings.TrimSpace(stringFromAny(v))
+		if text == "" {
+			return nil
+		}
+		return []string{text}
 	}
 }

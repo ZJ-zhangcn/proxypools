@@ -195,6 +195,19 @@ func New(cfg config.Config) (*App, error) {
 func (a *App) GetPrimarySubscription(ctx context.Context) (map[string]any, error) {
 	sub, err := a.repo.GetPrimarySubscription(ctx)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return map[string]any{
+				"id":                 0,
+				"name":               "default",
+				"url":                "",
+				"enabled":            false,
+				"last_fetch_at":      "",
+				"last_fetch_status":  "not_configured",
+				"last_fetch_error":   "",
+				"last_added_nodes":   0,
+				"last_removed_nodes": 0,
+			}, nil
+		}
 		return nil, err
 	}
 	return subscriptionPayload(sub), nil
@@ -215,6 +228,9 @@ func (a *App) RefreshSubscription(ctx context.Context) (map[string]any, error) {
 
 	sub, err := a.repo.GetPrimarySubscription(ctx)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("subscription not configured")
+		}
 		return nil, err
 	}
 	if sub.URL == "" {

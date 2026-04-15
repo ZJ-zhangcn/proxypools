@@ -100,3 +100,40 @@ func TestBuildConfigGeneratesPortScopedInboundsSelectorsAndLanes(t *testing.T) {
 		t.Fatal("expected canary lane route rule")
 	}
 }
+
+func TestBuildConfigPassesThroughAnyTLSOutbound(t *testing.T) {
+	nodes := []model.Node{{
+		ID:           1,
+		Name:         "anytls-1",
+		ProtocolType: "anytls",
+		Server:       "example.com",
+		Port:         443,
+		PayloadJSON:  `{"type":"anytls","server":"example.com","server_port":443,"password":"secret","tls":{"enabled":true,"server_name":"sg01.mozilla.org","insecure":true,"utls":{"enabled":true,"fingerprint":"chrome"},"alpn":["h2"]}}`,
+	}}
+
+	cfg, err := runtime.BuildConfig(runtime.BuildInput{
+		HTTPListenAddr:   "0.0.0.0",
+		HTTPPort:         7777,
+		SOCKSListenAddr:  "0.0.0.0",
+		SOCKSPort:        7780,
+		HealthListenAddr: "127.0.0.1",
+		HealthPort:       19090,
+		Nodes:            nodes,
+		ActiveNodeID:     1,
+	})
+	if err != nil {
+		t.Fatalf("build config failed: %v", err)
+	}
+	for _, snippet := range []string{
+		`"type":"anytls"`,
+		`"tag":"node-1"`,
+		`"server":"example.com"`,
+		`"server_name":"sg01.mozilla.org"`,
+		`"fingerprint":"chrome"`,
+		`"alpn":["h2"]`,
+	} {
+		if !strings.Contains(cfg, snippet) {
+			t.Fatalf("expected config to contain %s, got %s", snippet, cfg)
+		}
+	}
+}

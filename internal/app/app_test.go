@@ -65,6 +65,53 @@ func TestNewReturnsApp(t *testing.T) {
 	}
 }
 
+func TestGetPrimarySubscriptionReturnsNotConfiguredStateWhenMissing(t *testing.T) {
+	t.Setenv("ADMIN_PASSWORD_HASH", "hash")
+	tmpDir := t.TempDir()
+	cfg := config.Default()
+	cfg.DBPath = filepath.Join(tmpDir, "app.db")
+	cfg.SingboxConfigPath = filepath.Join(tmpDir, "sing-box.json")
+	cfg.SubscriptionURL = ""
+
+	a, err := New(cfg)
+	if err != nil {
+		t.Fatalf("expected New to succeed, got %v", err)
+	}
+
+	payload, err := a.GetPrimarySubscription(context.Background())
+	if err != nil {
+		t.Fatalf("expected empty subscription payload, got %v", err)
+	}
+	if payload["enabled"] != false {
+		t.Fatalf("expected enabled=false, got %#v", payload["enabled"])
+	}
+	if payload["last_fetch_status"] != "not_configured" {
+		t.Fatalf("expected not_configured status, got %#v", payload["last_fetch_status"])
+	}
+	if payload["url"] != "" {
+		t.Fatalf("expected empty subscription url, got %#v", payload["url"])
+	}
+}
+
+func TestRefreshSubscriptionReturnsNotConfiguredErrorWhenMissing(t *testing.T) {
+	t.Setenv("ADMIN_PASSWORD_HASH", "hash")
+	tmpDir := t.TempDir()
+	cfg := config.Default()
+	cfg.DBPath = filepath.Join(tmpDir, "app.db")
+	cfg.SingboxConfigPath = filepath.Join(tmpDir, "sing-box.json")
+	cfg.SubscriptionURL = ""
+
+	a, err := New(cfg)
+	if err != nil {
+		t.Fatalf("expected New to succeed, got %v", err)
+	}
+
+	_, err = a.RefreshSubscription(context.Background())
+	if err == nil || err.Error() != "subscription not configured" {
+		t.Fatalf("expected subscription not configured error, got %v", err)
+	}
+}
+
 func TestNewRestoresPersistedSubscriptionAndActiveNode(t *testing.T) {
 	t.Setenv("ADMIN_PASSWORD_HASH", "hash")
 	tmpDir := t.TempDir()
